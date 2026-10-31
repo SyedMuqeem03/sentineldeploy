@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentineldeploy
+  labels:
+    app.kubernetes.io/name: sentineldeploy
+    app.kubernetes.io/part-of: self-healing-platform

@@ -1,0 +1,14 @@
+services:
+  sentineldeploy:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: sentineldeploy-app
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ENABLE_FAILURE_INJECTION: "true"
+      FAILURE_MODE: normal
+    restart: unless-stopped

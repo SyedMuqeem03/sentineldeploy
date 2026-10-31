@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Unit tests and container smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build Docker image
+        run: docker build -f app/Dockerfile -t ghcr.io/${{ github.repository_owner }}/sentineldeploy:${{ github.sha }} .
+
+      - name: Run container smoke test
+        run: |
+          docker run -d --rm -p 3000:3000 --name sentineldeploy-ci ghcr.io/${{ github.repository_owner }}/sentineldeploy:${{ github.sha }}
+          sleep 15
+          curl -fsS http://localhost:3000/healthz
+          curl -fsS http://localhost:3000/metrics | grep sentineldeploy_http_requests_total
+          docker stop sentineldeploy-ci
+
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
