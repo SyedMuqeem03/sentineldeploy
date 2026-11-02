@@ -62,6 +62,43 @@ SentinelDeploy addresses that by combining:
 
 ## Architecture overview
 
+![SentinelDeploy architecture](docs/architecture/sentineldeploy-architecture.png)
+
+## Release and Recovery Flow
+
+```mermaid
+flowchart TD
+    classDef source fill:#E3F2FD,stroke:#1E88E5,stroke-width:2px,color:#0D47A1;
+    classDef delivery fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#1B5E20;
+    classDef runtime fill:#F3E5F5,stroke:#8E24AA,stroke-width:2px,color:#4A148C;
+    classDef monitor fill:#FCE4EC,stroke:#D81B60,stroke-width:2px,color:#880E4F;
+    classDef recovery fill:#FFEBEE,stroke:#E53935,stroke-width:2px,color:#B71C1C;
+    classDef decision fill:#E0F7FA,stroke:#00ACC1,stroke-width:2px,color:#006064;
+
+    A[GitHub Change]:::source --> B[CI Validation]:::delivery
+    B --> C[Build + Scan + Sign]:::delivery
+    C --> D[Push Image to GHCR]:::delivery
+    D --> E[Update GitOps Manifest]:::delivery
+    E --> F[Argo CD Sync]:::runtime
+    F --> G[Kubernetes Deployment]:::runtime
+    G --> H[Argo Rollouts Canary]:::runtime
+
+    H --> I[Prometheus Metrics]:::monitor
+    I --> J[Latency / Error Rate / Readiness Checks]:::monitor
+    J --> K{Healthy?}:::decision
+
+    K -->|Yes| L[Continue Canary Progression]:::runtime
+    L --> M[Full Promotion]:::runtime
+    K -->|No| N[Abort Canary]:::recovery
+    N --> O[Restore Stable ReplicaSet]:::recovery
+    O --> P[Revert Git Desired State]:::recovery
+    P --> Q[Argo CD Reconciliation]:::recovery
+    Q --> R[Service Restored + Evidence Recorded]:::recovery
+
+    I --> S[Grafana + Alertmanager]:::monitor
+    S --> N
+```
+
 ```text
 Developer
   |
