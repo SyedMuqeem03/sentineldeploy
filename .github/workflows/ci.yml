@@ -1,169 +1,213 @@
-name: ci
+
+name: SentinelDeploy CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
-  packages: write
 
-# Create a global environment variable with a lowercased repository owner name
 env:
-  IMAGE_REPO: ghcr.io/syedmuqeem03
+  IMAGE_NAME: ghcr.io/syedmuqeem03/sentineldeploy
 
 jobs:
-  # ==========================================
-  # COLUMN 1: Parallel Build Phase
-  # ==========================================
-  build-test-image:
-    name: "Matrix: Build test image"
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [test]
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Build test image
-        run: echo "Building test image target ${{ matrix.target }}..."
-
-  build-prod-image:
-    name: "Matrix: Build prod image"
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        variant: [api, worker] # Stacked card rendering
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Build Docker image
-        run: |
-          docker build -f app/Dockerfile -t ${{ env.IMAGE_REPO }}/sentineldeploy:${{ github.sha }}-${{ matrix.variant }} .
-
-  build-otel-image:
-    name: "Build otel image"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Build OpenTelemetry image
-        run: echo "Building otel image..."
 
   # ==========================================
-  # COLUMN 2: Testing & Security Phase
+  # STAGE 1: PARALLEL QUALITY AND SECURITY CHECKS
   # ==========================================
-  run-dialyzer:
-    name: "Matrix: Run dialyzer"
-    needs: [build-test-image, build-prod-image]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        check: [static-analysis]
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Run code analysis
-        run: echo "Running static analysis..."
 
-  run-tests:
-    name: "Matrix: Run tests"
-    needs: [build-test-image, build-prod-image]
+  unit-tests:
+    name: "Unit Tests - Node.js 22"
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        suite: [unit]
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - name: Install dependencies
         run: npm ci
+
       - name: Run unit tests
         run: npm test
 
-  security-scan-code:
-    name: "Security scan code"
-    needs: [build-test-image, build-prod-image]
+
+  secret-scan:
+    name: "Security - Gitleaks"
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Run Gitleaks
+
+      - name: Scan for exposed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Kept in UPPERCASE (Secrets are case-sensitive)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  run-external-api-tests:
-    name: "Matrix: Run external API tests"
-    needs: [build-test-image, build-prod-image]
+
+  filesystem-security:
+    name: "Matrix - Trivy ${{ matrix.scan-type }}"
     runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: false
       matrix:
-        environment: [smoke]
+        scan-type:
+          - fs
+          - config
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-      - name: Build image for smoke test
-        run: docker build -f app/Dockerfile -t ${{ env.IMAGE_REPO }}/sentineldeploy:smoke .
-      - name: Run container smoke test
-        run: |
-          docker run -d --rm -p 3000:3000 --name sentineldeploy-ci ${{ env.IMAGE_REPO }}/sentineldeploy:smoke
-          sleep 15
-          curl -fsS http://localhost:3000/healthz
-          curl -fsS http://localhost:3000/metrics | grep sentineldeploy_http_requests_total || true
-          docker stop sentineldeploy-ci
 
-  security-scan-prod-image:
-    name: "Matrix: Security scan prod ima..."
-    needs: [build-prod-image]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [filesystem]
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Run Trivy filesystem scan
+      - name: Run Trivy security scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: fs
+          scan-type: ${{ matrix.scan-type }}
           scan-ref: .
           format: table
           exit-code: 0
           severity: CRITICAL,HIGH
 
-  # ==========================================
-  # COLUMN 3: AWS ECS Deployment
-  # ==========================================
-  deploy-aws-ecs:
-    name: "Deploy to AWS ECS"
-    needs:
-      - run-dialyzer
-      - run-tests
-      - security-scan-code
-      - run-external-api-tests
-      - security-scan-prod-image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy step
-        run: echo "Deploying container image to AWS ECS..."
 
   # ==========================================
-  # COLUMN 4: Tag Production Image
+  # STAGE 2: DOCKER CONTAINER VALIDATION
   # ==========================================
-  tag-prod-images:
-    name: "Tag prod images as latest"
-    needs: [deploy-aws-ecs]
+
+  container-smoke-test:
+    name: "Docker - Build and Smoke Test"
     runs-on: ubuntu-latest
+
+    needs:
+      - unit-tests
+      - secret-scan
+      - filesystem-security
+
     steps:
-      - name: Tag images step
-        run: echo "Tagging production image as latest in GHCR..."
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f app/Dockerfile \
+            -t sentineldeploy:${{ github.sha }} .
+
+      - name: Start application container
+        run: |
+          docker run -d \
+            --rm \
+            -p 3000:3000 \
+            --name sentineldeploy-ci \
+            sentineldeploy:${{ github.sha }}
+
+      - name: Wait for application health
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:3000/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Application health check failed"
+          docker logs sentineldeploy-ci
+          exit 1
+
+      - name: Verify Prometheus metrics
+        run: |
+          curl -fsS http://localhost:3000/metrics \
+            | grep "sentineldeploy_http_requests_total"
+
+      - name: Stop application container
+        if: always()
+        run: docker stop sentineldeploy-ci || true
+
+
+  # ==========================================
+  # STAGE 3: CONTAINER IMAGE SECURITY
+  # ==========================================
+
+  image-security-scan:
+    name: "Security - Trivy Container Image"
+    runs-on: ubuntu-latest
+
+    needs:
+      - unit-tests
+      - secret-scan
+      - filesystem-security
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build image for security scanning
+        run: |
+          docker build \
+            -f app/Dockerfile \
+            -t sentineldeploy:${{ github.sha }} .
+
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: sentineldeploy:${{ github.sha }}
+          format: table
+          exit-code: 0
+          severity: CRITICAL,HIGH
+
+
+  # ==========================================
+  # STAGE 4: PUBLISH RELEASE IMAGE
+  # ==========================================
+
+  publish-image:
+    name: "Release - Publish to GHCR"
+    runs-on: ubuntu-latest
+
+    needs:
+      - container-smoke-test
+      - image-security-scan
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build production image
+        run: |
+          docker build \
+            -f app/Dockerfile \
+            -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Push immutable image
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Display published image
+        run: |
+          echo "Published image:"
+          echo "${{ env.IMAGE_NAME }}:${{ github.sha }}"
