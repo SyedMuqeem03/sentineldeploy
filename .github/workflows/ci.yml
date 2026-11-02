@@ -1,4 +1,4 @@
-# name: ci
+name: ci
 
 on:
   push:
@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
   packages: write
+
+# Create a global environment variable with a lowercased repository owner name
+env:
+  IMAGE_REPO: ghcr.io/syedmuqeem03
 
 jobs:
   # ==========================================
@@ -31,14 +35,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        variant: [api, worker] # Renders as "2 jobs completed" stacked card
+        variant: [api, worker] # Stacked card rendering
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-      - name: Normalize repository owner for GHCR
-        run: echo "IMAGE_REPO=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
       - name: Build Docker image
-        run: docker build -f app/Dockerfile -t ghcr.io/${{ github.repository_owner }}/sentineldeploy:${{ github.sha }}-${{ matrix.variant }} .
+        run: |
+          docker build -f app/Dockerfile -t ${{ env.IMAGE_REPO }}/sentineldeploy:${{ github.sha }}-${{ matrix.variant }} .
 
   build-otel-image:
     name: "Build otel image"
@@ -97,7 +100,7 @@ jobs:
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Kept in UPPERCASE (Secrets are case-sensitive)
 
   run-external-api-tests:
     name: "Matrix: Run external API tests"
@@ -110,10 +113,10 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Build image for smoke test
-        run: docker build -f app/Dockerfile -t sentineldeploy:smoke .
+        run: docker build -f app/Dockerfile -t ${{ env.IMAGE_REPO }}/sentineldeploy:smoke .
       - name: Run container smoke test
         run: |
-          docker run -d --rm -p 3000:3000 --name sentineldeploy-ci sentineldeploy:smoke
+          docker run -d --rm -p 3000:3000 --name sentineldeploy-ci ${{ env.IMAGE_REPO }}/sentineldeploy:smoke
           sleep 15
           curl -fsS http://localhost:3000/healthz
           curl -fsS http://localhost:3000/metrics | grep sentineldeploy_http_requests_total || true
