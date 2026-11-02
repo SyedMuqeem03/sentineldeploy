@@ -60,11 +60,50 @@ SentinelDeploy addresses that by combining:
 
 ---
 
-## Architecture overview
 
-![SentinelDeploy architecture](docs/architecture/sentineldeploy-architecture.png)
+## Architecture Overview
+
+This diagram shows the main platform components and how source control, CI/CD, GitOps, Kubernetes, and observability fit together in a single delivery model.
+
+```mermaid
+flowchart TD
+    classDef source fill:#E3F2FD,stroke:#1E88E5,stroke-width:2px,color:#0D47A1;
+    classDef delivery fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#1B5E20;
+    classDef runtime fill:#F3E5F5,stroke:#8E24AA,stroke-width:2px,color:#4A148C;
+    classDef monitor fill:#FCE4EC,stroke:#D81B60,stroke-width:2px,color:#880E4F;
+    classDef recovery fill:#FFEBEE,stroke:#E53935,stroke-width:2px,color:#B71C1C;
+
+    H1["Source"]:::source
+    H2["Delivery"]:::delivery
+    H3["Monitoring"]:::monitor
+    H4["Recovery"]:::recovery
+
+    A[GitHub]:::source --> B[Actions]:::delivery
+    B --> C[Docker Build]:::delivery
+    C --> D[Kubernetes]:::runtime
+    D --> E[Argo CD]:::runtime
+    E --> F[Argo Rollouts]:::runtime
+    F --> G[Application]:::runtime
+
+    G --> H[Prometheus]:::monitor
+    H --> I[Grafana]:::monitor
+    H --> J[Alertmanager]:::monitor
+
+    G --> K[Self-Healing Rollback]:::recovery
+    H --> L[Failure Detection]:::recovery
+    L --> K
+
+    H1 --> A
+    H2 --> B
+    H2 --> D
+    H3 --> G
+    H3 --> H
+    H4 --> K
+```
 
 ## Release and Recovery Flow
+
+This diagram shows how a release moves through validation, progressive delivery, and automated rollback when health checks fail.
 
 ```mermaid
 flowchart TD
@@ -98,6 +137,10 @@ flowchart TD
     I --> S[Grafana + Alertmanager]:::monitor
     S --> N
 ```
+
+## Deployment Sequence
+
+This sequence represents the exact operational flow from source change to safe rollback and recovery evidence.
 
 ```text
 Developer
